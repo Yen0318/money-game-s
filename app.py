@@ -1,6 +1,6 @@
 import os
 import csv
-import copy  # ✨ 新增：用來複製數據，解決卡頓問題
+import copy
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
@@ -18,6 +18,9 @@ BASE_RATES = {
 ASSET_KEYS = ['Dividend', 'USBond', 'TWStock', 'Cash', 'Crypto']
 ASSET_NAMES = {'Dividend': '分紅收益', 'USBond': '美債', 'TWStock': '台股', 'Cash': '現金', 'Crypto': '加密幣'}
 FINANCE_COLORS = {'分紅收益': '#F59E0B', '美債': '#3B82F6', '台股': '#EF4444', '現金': '#9CA3AF', '加密幣': '#8B5CF6'}
+
+# 注意：這裡的 key 是小寫，對應卡片資料結構
+KEY_MAPPING = {'Dividend': 'dividend', 'USBond': 'bond', 'TWStock': 'stock', 'Cash': 'cash', 'Crypto': 'crypto'}
 
 EVENT_CARDS = {
     "101": {"name": "US FED降息3%",      "dividend": 7,  "bond": 2,  "stock": 20,   "cash": 0,  "crypto": 100,   "desc": "💸 資金大放水！市場流動性暴增，風險資產狂噴。"},
@@ -48,6 +51,11 @@ h1 { color: var(--primary-dark); font-weight: 800; text-align: center; }
 .metric-box { text-align: center; border: 1px solid #E5E7EB; border-radius: 8px; padding: 10px; background: white; }
 .metric-val { font-size: 1.5rem; font-weight: 800; color: var(--primary-dark); }
 .metric-label { font-size: 0.9rem; color: #6B7280; }
+/* Table Style */
+.asset-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.asset-table th { text-align: left; padding: 8px; color: #6B7280; font-size: 0.9rem; border-bottom: 2px solid #E5E7EB; }
+.asset-table td { padding: 12px 8px; border-bottom: 1px solid #F3F4F6; font-weight: 500; }
+.impact-box { padding: 10px; border-radius: 8px; text-align: center; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 """
 
 # ==========================================
@@ -63,7 +71,7 @@ app_ui = ui.page_fluid(
         ui.div("Wealth Management Simulation", style="color: #6B7280; font-size: 1.2rem; font-weight: 500; margin-top: 8px; text-align: center; margin-bottom: 30px;"),
     ),
 
-    # ✨ 修正重點：使用 ui.layout_sidebar 來正確包覆側邊欄
+    # ✨ 使用 ui.layout_sidebar 來正確包覆側邊欄
     ui.layout_sidebar(
         # 2. 側邊欄
         ui.sidebar(
@@ -80,9 +88,9 @@ app_ui = ui.page_fluid(
             bg="#FFFFFF", open="closed"
         ),
         
-        # 3. 主要內容區 (放在 layout_sidebar 裡面)
+        # 3. 主要內容區
         ui.navset_hidden(
-            # --- 頁面 1: 登入頁 ---
+            # --- Page 1: Login ---
             ui.nav_panel("login",
                 ui.layout_columns(
                     ui.div(), # spacer
@@ -108,7 +116,7 @@ app_ui = ui.page_fluid(
                 )
             ),
 
-            # --- 頁面 2: 配置頁 (Year 0) ---
+            # --- Page 2: Setup (Year 0) ---
             ui.nav_panel("setup",
                 ui.layout_columns(
                     ui.div(
@@ -132,9 +140,9 @@ app_ui = ui.page_fluid(
                 )
             ),
 
-            # --- 頁面 3: 遊戲進行中 (Playing) ---
+            # --- Page 3: Playing ---
             ui.nav_panel("playing",
-                # 頂部儀表板
+                # Top Dashboard
                 ui.div(
                     ui.layout_columns(
                         ui.div(ui.div("目前年份", class_="metric-label"), ui.output_text("ui_year", inline=True), class_="metric-box"),
@@ -146,18 +154,27 @@ app_ui = ui.page_fluid(
                 
                 ui.div(ui.output_ui("ui_progress_bar"), style="margin-bottom: 20px;"),
 
-                # 遊戲主動態區域
+                # Dynamic Interaction Area
                 ui.output_ui("game_interaction_area"),
                 
                 ui.br(),
-                ui.div(
-                    ui.h4("📊 當前資產分佈"),
-                    output_widget("chart_assets_now"),
-                    class_="card"
+                ui.layout_columns(
+                    ui.div(
+                        ui.h4("📊 當前資產分佈"),
+                        output_widget("chart_assets_now"),
+                        class_="card"
+                    ),
+                    ui.div(
+                        ui.h4("💰 資產詳細清單"),
+                        # 🔥 新增：這裡顯示實際金額表格
+                        ui.output_ui("ui_current_assets_detail"),
+                        class_="card"
+                    ),
+                    col_widths=(6, 6)
                 )
             ),
 
-            # --- 頁面 4: 結算頁 (Finished) ---
+            # --- Page 4: Finished ---
             ui.nav_panel("finished",
                 ui.div(
                     ui.h1("🏆 挑戰完成！", style="color: #F59E0B"),
@@ -195,7 +212,7 @@ app_ui = ui.page_fluid(
 # ==========================================
 def server(input: Inputs, output: Outputs, session: Session):
     
-    # --- Reactive State (遊戲狀態) ---
+    # --- Reactive State ---
     game_state = reactive.Value({
         "year": 0,
         "assets": {k: 0 for k in ASSET_KEYS},
@@ -213,7 +230,6 @@ def server(input: Inputs, output: Outputs, session: Session):
     def _():
         name = input.user_name().strip()
         if name:
-            # ✨ 修正：使用 deepcopy 確保狀態更新被偵測到
             gs = copy.deepcopy(game_state.get())
             gs["user_name"] = name
             game_state.set(gs)
@@ -257,8 +273,6 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         initial = 1000000
         props = [input.p_div(), input.p_bond(), input.p_stock(), input.p_cash(), input.p_crypto()]
-        
-        # ✨ 修正：使用 deepcopy
         gs = copy.deepcopy(game_state.get())
         
         new_assets = {}
@@ -294,6 +308,39 @@ def server(input: Inputs, output: Outputs, session: Session):
         pct = (y / 30) * 100
         return ui.HTML(f'<div style="width:100%; background:#E5E7EB; height:8px; border-radius:4px;"><div style="width:{pct}%; background:var(--primary); height:100%; border-radius:4px;"></div></div>')
 
+    # 🔥 新增功能 1: 顯示當前資產詳細金額表格
+    @render.ui
+    def ui_current_assets_detail():
+        assets = game_state.get()['assets']
+        total = sum(assets.values())
+        
+        rows = ""
+        for k in ASSET_KEYS:
+            val = assets[k]
+            pct = (val / total * 100) if total > 0 else 0
+            rows += f"""
+            <tr>
+                <td style="color:{FINANCE_COLORS[ASSET_NAMES[k]]}; font-weight:bold;">{ASSET_NAMES[k]}</td>
+                <td>${int(val):,}</td>
+                <td>{pct:.1f}%</td>
+            </tr>
+            """
+        
+        return ui.HTML(f"""
+        <table class="asset-table">
+            <thead>
+                <tr>
+                    <th>項目</th>
+                    <th>金額 ($)</th>
+                    <th>佔比</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows}
+            </tbody>
+        </table>
+        """)
+
     @render.ui
     def game_interaction_area():
         gs = game_state.get()
@@ -314,7 +361,9 @@ def server(input: Inputs, output: Outputs, session: Session):
                 ui.layout_columns(
                     ui.div(
                         ui.input_text("event_code_input", "請輸入卡片代碼 (3碼)", placeholder="例如: 101"),
-                        ui.output_ui("event_card_display"), 
+                        ui.output_ui("event_card_display"),
+                        # 🔥 新增功能 2: 顯示衝擊預覽
+                        ui.output_ui("event_impact_preview"),
                         ui.output_ui("event_apply_btn_area") 
                     ),
                     ui.div(
@@ -336,13 +385,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             )
         return ui.div()
 
-    # --- Jump Logic (時光機邏輯) ---
+    # --- Jump Logic ---
     @reactive.Effect
     @reactive.event(input.btn_jump_time)
     def _():
-        # ✨ 修正：使用 deepcopy 確保狀態更新
         gs = copy.deepcopy(game_state.get())
-        
         current_year = gs["year"]
         rates = gs["dynamic_rates"]
         
@@ -355,8 +402,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             
         gs["year"] = current_year
         gs["sub_stage"] = "event_input"
-        
-        # 這裡的 set 才會觸發 UI 更新，因為 gs 是一個全新的物件
         game_state.set(gs)
 
     # --- Event Logic ---
@@ -388,6 +433,64 @@ def server(input: Inputs, output: Outputs, session: Session):
             )
         return ui.div()
 
+    # 🔥 實作功能 2: 計算並顯示衝擊影響金額
+    @render.ui
+    def event_impact_preview():
+        try:
+            code = input.event_code_input().strip()
+        except:
+            return ui.div()
+            
+        if code in EVENT_CARDS:
+            card = EVENT_CARDS[code]
+            assets = game_state.get()['assets']
+            
+            impact_html = ""
+            for k in ASSET_KEYS:
+                card_key = KEY_MAPPING[k]
+                pct_change = card[card_key]
+                
+                # 計算實際影響金額
+                current_val = assets[k]
+                impact_val = current_val * (pct_change / 100)
+                
+                # 決定顏色 (正為綠，負為紅)
+                if pct_change < 0:
+                    bg_color = "#FEF2F2"
+                    text_color = "#EF4444"
+                    sign = "-"
+                    arrow = "▼"
+                elif pct_change > 0:
+                    bg_color = "#ECFDF5"
+                    text_color = "#10B981"
+                    sign = "+"
+                    arrow = "▲"
+                else:
+                    bg_color = "#F3F4F6"
+                    text_color = "#6B7280"
+                    sign = ""
+                    arrow = "-"
+
+                impact_html += f"""
+                <div style="flex: 1; background: {bg_color}; padding: 8px; border-radius: 8px; margin: 0 4px; text-align: center; border: 1px solid {text_color}33;">
+                    <div style="font-size: 11px; color: #6B7280;">{ASSET_NAMES[k]}</div>
+                    <div style="font-size: 16px; font-weight: bold; color: {text_color};">{arrow} {abs(pct_change)}%</div>
+                    <div style="font-size: 12px; font-weight: 600; color: {text_color}; margin-top: 4px;">
+                        {sign}${int(abs(impact_val)):,}
+                    </div>
+                </div>
+                """
+
+            return ui.HTML(f"""
+                <div style="margin-top: 15px;">
+                    <h5 style="color: #4B5563; font-size: 0.9rem;">📉 資產衝擊預覽 (預估損益)</h5>
+                    <div style="display: flex; justify-content: space-between; gap: 4px;">
+                        {impact_html}
+                    </div>
+                </div>
+            """)
+        return ui.div()
+
     @render.ui
     def event_apply_btn_area():
         try:
@@ -409,13 +512,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         if code not in EVENT_CARDS: return
         
         card = EVENT_CARDS[code]
-        # ✨ 修正：使用 deepcopy
         gs = copy.deepcopy(game_state.get())
         
-        key_map = {'dividend': 'Dividend', 'bond': 'USBond', 'stock': 'TWStock', 'cash': 'Cash', 'crypto': 'Crypto'}
-        for card_k, asset_k in key_map.items():
-            pct = card[card_k]
-            gs["assets"][asset_k] = gs["assets"][asset_k] * (1 + pct/100)
+        for k in ASSET_KEYS:
+            card_key = KEY_MAPPING[k]
+            pct = card[card_key]
+            gs["assets"][k] = gs["assets"][k] * (1 + pct/100)
 
         gs["drawn_cards"].append(f"第 {gs['year']} 年: [{code}] {card['name']}")
         rec = gs["history"][-1]
@@ -465,7 +567,6 @@ def server(input: Inputs, output: Outputs, session: Session):
                 ui.notification_show("比例總和必須為 100%！", type="error")
                 return
                 
-            # ✨ 修正：使用 deepcopy
             gs = copy.deepcopy(game_state.get())
             current_total = sum(gs["assets"].values())
             
@@ -594,7 +695,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if os.path.exists(CSV_FILE):
             return CSV_FILE
 
-# ⚠️ 確認靜態目錄位置
+# ⚠️ Confirm Static Directory
 app_dir = Path(__file__).parent
 app = App(app_ui, server, static_assets=app_dir / "www")
 
